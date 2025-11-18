@@ -251,10 +251,12 @@ static void usage(const char *prog) {
 	fprintf(stderr,
 		"usage: %s <command> [args]\n"
 		"commands:\n"
-		"    start <svc>    start service\n"
-		"    stop <svc>     stop service\n"
-		"    restart <svc>  restart service\n"
-		"    list           list services\n",
+		"    enable [--user,-u] <svc>   enable service\n"
+		"    disable [--user,-u] <svc>  disable service\n"
+		"    start [--user,-u] <svc>    start service\n"
+		"    stop [--user,-u] <svc>     stop service\n"
+		"    restart [--user,-u] <svc>  restart service\n"
+		"    list                       list services\n",
 		prog);
 	exit(1);
 }
