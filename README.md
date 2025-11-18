@@ -34,10 +34,7 @@ This software is mostly for lazy people doing simple tasks. Once things get comp
 
 ## Architecture and API
 
-#### Architecture guide to software:
-
-(TODO) (Design it! + Release it! + The Art of UNIX programming + my own opinions)
-https://www.jpnt.github.io/posts/software-architecture.md
+#### Architecture:
 
 This tool is designed to work in environments that cannot make assumptions about the host init system.
 Best practices are ensured with multiple return codes (svc_rc) so that you can handle that in your client.
@@ -45,10 +42,11 @@ Best practices are ensured with multiple return codes (svc_rc) so that you can h
 When run as normal user (non-root) the list command will only try to list user services.
 
 All other commands (enable/disable/start/stop) require explicit --user flag enabled.
-This is important to define to ensure the same and correct behavior accross all service managers.
+This is important to define to ensure the same and correct behavior across all service managers. Do as little
+as possible as explicitly as possible.
 
 The only reason why list command is different is because its way easier for daily use. The tradeoff is
-being less explicit, if building a client that uses svci and you need to consume the list of services
+being less explicit. If building a client that uses svci and you need to consume the list of services
 do not forget this detail.
 
 #### API:
