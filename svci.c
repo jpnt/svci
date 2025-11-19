@@ -261,8 +261,10 @@ static void dispatch(int argc, char **argv) {
 	}
 
 	/* Exactly one match now: cmdtab[idx] */
-	if (argc != cmdtab[idx].argc_needed)
+	if (argc != cmdtab[idx].argc_needed) {
+		fprintf(stderr, "svci: missing service argument\n");
 		usage(argv[0]);
+	}
 
 	int rc = cmdtab[idx].fn(argc, argv);
 	exit(rc == SVC_OK ? 0 : 1);
