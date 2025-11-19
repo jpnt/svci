@@ -1,9 +1,11 @@
 #include "svci.h"
 #include "log.h"
+#include "util.h"
 
 #include <dirent.h>
 #include <errno.h>
 #include <limits.h>
+#include <linux/limits.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -26,131 +28,62 @@ typedef enum {
 
 pid1_type_t g_pid1 = PID1_UNKNOWN;
 
-/* return protocol for run_*() functions:
- *   0   -> child exited 0 (success)
- *  >0   -> child exited with status (raw WEXITSTATUS)
- *  -1   -> fork()/waitpid()/exec failed; errno set by the failing syscall
- */
-static int run_sv(const char *cmd, const char *svc) {
-	pid_t pid = fork();
-	if (pid < 0)
-		return -1; /* errno set by fork */
-
-	if (pid == 0) {
-		/* child: exec sv <cmd> <svc> */
-		execlp("sv", "sv", cmd, svc, (char *)0);
-		_exit(127); /* exec failed, parent sees 127 */
-	}
-
-	/* parent */
-	int status;
-	if (waitpid(pid, &status, 0) < 0)
-		return -1; /* errno set by waitpid */
-
-	if (WIFEXITED(status))
-		return WEXITSTATUS(status);
-
-	/* killed by signal -> treat as backend failure with sentinel >0 */
-	return 128 + (WIFSIGNALED(status) ? WTERMSIG(status) : 0);
+/* static command table */
+struct cmd {
+	const char *name;
+	int argc_needed;
+	int (*fn)(int argc, char **argv);
+};
+static int do_start(int argc, char **argv) {
+	(void)argc;
+	return svc_start(argv[2]);
+}
+static int do_stop(int argc, char **argv) {
+	(void)argc;
+	return svc_stop(argv[2]);
+}
+static int do_restart(int argc, char **argv) {
+	(void)argc;
+	return svc_restart(argv[2]);
+}
+static int do_list(int argc, char **argv) {
+	(void)argc;
+	(void)argv;
+	return svc_list();
 }
 
-svc_rc svc_start(const char *service) {
-	log_debug("svc_start: %s\n", service);
-	return SVC_OK;
+static struct cmd cmdtab[] = {
+    {"start", 3, do_start},
+    {"stop", 3, do_stop},
+    {"restart", 3, do_restart},
+    {"list", 2, do_list},
+};
+static const size_t ncmd = sizeof(cmdtab) / sizeof(cmdtab[0]);
+
+typedef int (*svc_entry_cb)(const char *fullpath);
+/* wrappers */
+static int cb_runit_status(const char *path) {
+	char *argv[] = {"sv", "status", (char *)path, NULL};
+	return run_cmd(argv);
 }
 
-svc_rc svc_stop(const char *service) {
-	log_debug("svc_stop: %s\n", service);
-	return SVC_OK;
-}
-
-svc_rc svc_restart(const char *service) {
-	log_debug("svc_restart: %s\n", service);
-	return SVC_OK;
-}
-
-svc_rc svc_list_runit(void) {
-	log_debug("svc_list_runit\n");
-
-	struct dirent *ent;
-	char path[PATH_MAX];
-	struct stat st;
-	int r;
-
-	const char *home = getenv("HOME");
-	if (home && *home) {
-		char userdir[PATH_MAX];
-
-		if (snprintf(userdir, sizeof(userdir), "%s/.config/service",
-			     home) < (int)sizeof(userdir)) {
-			DIR *d = opendir(userdir);
-			if (d) {
-				while ((ent = readdir(d)) != NULL) {
-
-					if (ent->d_name[0] == '.')
-						continue;
-
-					if (snprintf(path, sizeof(path),
-						     "%s/%s", userdir,
-						     ent->d_name) >=
-					    (int)sizeof(path))
-						continue;
-
-					if (lstat(path, &st) < 0)
-						continue;
-
-					if (!S_ISDIR(st.st_mode) &&
-					    !S_ISLNK(st.st_mode))
-						continue;
-
-					r = run_sv("status", path);
-
-					if (r == -1) {
-						fprintf(stderr,
-							"svci: %s: %s\n", path,
-							strerror(errno));
-						closedir(d);
-
-						return (errno == EACCES ||
-							errno == EPERM)
-							   ? SVC_ERR_PERMISSION
-							   : SVC_ERR_IO;
-					}
-
-					if (r != 0) {
-						fprintf(stderr,
-							"svci: backend error "
-							"for %s (exit %d)\n",
-							path, r);
-						closedir(d);
-						return SVC_ERR_BACKEND;
-					}
-				}
-				closedir(d);
-			}
-		}
-	}
-
-	if (geteuid() != 0) {
-		// non-root
-		return SVC_OK;
-	}
-
-	DIR *d = opendir("/var/service");
-	if (!d) {
-		fprintf(stderr, "svci: /var/service: %s\n", strerror(errno));
-
+static svc_rc walk_dir(const char *dir, svc_entry_cb cb) {
+	DIR *d = opendir(dir);
+	if (!d)
 		return (errno == EACCES || errno == EPERM) ? SVC_ERR_PERMISSION
 							   : SVC_ERR_IO;
-	}
+
+	struct dirent *ent;
+	struct stat st;
+	char path[PATH_MAX];
 
 	while ((ent = readdir(d)) != NULL) {
 
 		if (ent->d_name[0] == '.')
 			continue;
 
-		if (snprintf(path, sizeof(path), "/var/service/%s",
-			     ent->d_name) >= (int)sizeof(path))
+		if (snprintf(path, sizeof(path), "%s/%s", dir, ent->d_name) >=
+		    (int)sizeof(path))
 			continue;
 
 		if (lstat(path, &st) < 0)
@@ -159,19 +92,16 @@ svc_rc svc_list_runit(void) {
 		if (!S_ISDIR(st.st_mode) && !S_ISLNK(st.st_mode))
 			continue;
 
-		r = run_sv("status", path);
+		int r = cb(path);
 
 		if (r == -1) {
 			fprintf(stderr, "svci: %s: %s\n", path,
 				strerror(errno));
 			closedir(d);
-
-			return (errno == EACCES || errno == EPERM)
-				   ? SVC_ERR_PERMISSION
-				   : SVC_ERR_IO;
+			return SVC_ERR_IO;
 		}
 
-		if (r != 0) {
+		if (r > 0) {
 			fprintf(stderr,
 				"svci: backend error for %s (exit %d)\n", path,
 				r);
@@ -182,6 +112,53 @@ svc_rc svc_list_runit(void) {
 
 	closedir(d);
 	return SVC_OK;
+}
+
+static int get_user_service_dir(char *out, size_t outsz) {
+	const char *home = getenv("HOME");
+	if (!home || !*home)
+		return 0;
+
+	int n = snprintf(out, outsz, "%s/.config/service", home);
+	if (n < 0 || n >= (int)outsz)
+		return 0;
+
+	return 1;
+}
+
+svc_rc svc_start(const char *service) {
+	log_debug("svc_start: %s\n", service);
+	(void)service;
+	return SVC_ERR_UNSUPPORTED;
+}
+
+svc_rc svc_stop(const char *service) {
+	log_debug("svc_stop: %s\n", service);
+	(void)service;
+	return SVC_ERR_UNSUPPORTED;
+}
+
+svc_rc svc_restart(const char *service) {
+	log_debug("svc_restart: %s\n", service);
+	(void)service;
+	return SVC_ERR_UNSUPPORTED;
+}
+
+svc_rc svc_list_runit(void) {
+	log_debug("svc_list_runit");
+
+	char userdir[PATH_MAX];
+
+	/* always try user service*/
+	if (get_user_service_dir(userdir, sizeof(userdir)))
+		walk_dir(userdir, cb_runit_status);
+
+	/* only root sees system services */
+	/* the kernel checks effective UID for permission */
+	if (geteuid() != 0)
+		return SVC_OK;
+
+	return walk_dir("/var/service", cb_runit_status);
 }
 
 svc_rc svc_list(void) {
@@ -251,49 +228,54 @@ static void usage(const char *prog) {
 	fprintf(stderr,
 		"usage: %s <command> [args]\n"
 		"commands:\n"
-		"    enable [--user,-u] <svc>   enable service\n"
-		"    disable [--user,-u] <svc>  disable service\n"
-		"    start [--user,-u] <svc>    start service\n"
-		"    stop [--user,-u] <svc>     stop service\n"
-		"    restart [--user,-u] <svc>  restart service\n"
-		"    list                       list services\n",
+		"    enable <svc>   enable service\n"
+		"    disable <svc>  disable service\n"
+		"    start <svc>    start service\n"
+		"    stop <svc>     stop service\n"
+		"    restart <svc>  restart service\n"
+		"    list           list services\n",
 		prog);
 	exit(1);
+}
+
+static void dispatch(int argc, char **argv) {
+	const char *input = argv[1];
+	size_t matches = 0;
+	size_t idx = 0;
+
+	for (size_t i = 0; i < ncmd; i++) {
+		if (strncmp(input, cmdtab[i].name, strlen(input)) == 0) {
+			matches++;
+			idx = i;
+		}
+	}
+
+	if (matches == 0) {
+		fprintf(stderr, "svci: unknown command '%s'\n", input);
+		usage(argv[0]);
+	}
+
+	if (matches > 1) {
+		fprintf(stderr, "svci: ambiguous command '%s'\n", input);
+		usage(argv[0]);
+	}
+
+	/* Exactly one match now: cmdtab[idx] */
+	if (argc != cmdtab[idx].argc_needed)
+		usage(argv[0]);
+
+	int rc = cmdtab[idx].fn(argc, argv);
+	exit(rc == SVC_OK ? 0 : 1);
 }
 
 int main(int argc, char *argv[]) {
 	if (argc < 2)
 		usage(argv[0]);
 
-	const char *cmd = argv[1];
-
 	if (parse_pid1() != 0)
 		return 1;
 
-	if (strcmp(cmd, "start") == 0) {
-		if (argc != 3)
-			usage(argv[0]);
-		return svc_start(argv[2]) == SVC_OK ? 0 : 1;
-	}
+	dispatch(argc, argv);
 
-	if (strcmp(cmd, "stop") == 0) {
-		if (argc != 3)
-			usage(argv[0]);
-		return svc_stop(argv[2]) == SVC_OK ? 0 : 1;
-	}
-
-	if (strcmp(cmd, "restart") == 0) {
-		if (argc != 3)
-			usage(argv[0]);
-		return svc_restart(argv[2]) == SVC_OK ? 0 : 1;
-	}
-
-	if (strcmp(cmd, "list") == 0) {
-		if (argc != 2)
-			usage(argv[0]);
-		return svc_list() == SVC_OK ? 0 : 1;
-	}
-
-	usage(argv[0]); /* fallthrough */
-	return 0;	/* not reached */
+	return 0; /* not reached */
 }

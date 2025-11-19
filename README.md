@@ -41,13 +41,14 @@ Best practices are ensured with multiple return codes (svc_rc) so that you can h
 
 When run as normal user (non-root) the list command will only try to list user services.
 
-All other commands (enable/disable/start/stop) require explicit --user flag enabled.
-This is important to define to ensure the same and correct behavior across all service managers. Do as little
-as possible as explicitly as possible.
-
-The only reason why list command is different is because its way easier for daily use. The tradeoff is
-being less explicit. If building a client that uses svci and you need to consume the list of services
-do not forget this detail.
+<!-- TODO: now im here, lets actually see and do a few prototypes before coming up with a architecture and design upfront like an idiot -->
+<!-- TODO: only do this when actually need arises. I will prefer to keep it simple and deep: no --user flag necessary just get uid and run for user, if root run for root. Keep it simple stupid. Why copy the systemctl command? LOL -->
+<!-- TODO: All other commands (enable/disable/start/stop) require explicit --user flag enabled. -->
+<!-- This is important to define to ensure the same and correct behavior across all service managers. Do as little -->
+<!-- as possible as explicitly as possible. -->
+<!-- TODO: The only reason why list command is different is because its way easier for daily use. The tradeoff is -->
+<!-- being less explicit. If building a client that uses svci and you need to consume the list of services -->
+<!-- do not forget this detail. -->
 
 #### API:
 

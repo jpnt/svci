@@ -12,8 +12,8 @@ typedef enum {
 	SVC_ERR_UNKNOWN = -9
 } svc_rc;
 
-// svc_rc svc_enable(const char *);
-// svc_rc svc_disable(const char *);
+svc_rc svc_enable(const char *);
+svc_rc svc_disable(const char *);
 svc_rc svc_start(const char *);
 svc_rc svc_stop(const char *);
 svc_rc svc_restart(const char *);
